@@ -198,6 +198,7 @@ def app(page: ft.Page) -> None:
     page.theme = ft.Theme(font_family="Meslo")
 
     page.window.resizable = False
+    page.window.maximizable = False
 
     page.padding = 20
     page.window.width = 500
