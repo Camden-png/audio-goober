@@ -1,3 +1,4 @@
+flet
+numpy
 pyaudio
 pydub
-flet

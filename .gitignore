@@ -1,2 +1,6 @@
 audio/
 processed_audio/
+
+.venv/
+.vscode/
+__pycache__/

@@ -2,6 +2,8 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 import os
+import platform
+import sys
 from typing import (
     Any, Dict, Optional, Tuple
 )
@@ -12,6 +14,8 @@ from utils import CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH
 import flet as ft
 import numpy as np
 import pyaudio
+
+IS_WINDOWS = sys.platform == "win32"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROCESSED_DIR = os.path.join(SCRIPT_DIR, "processed_audio")
@@ -188,7 +192,9 @@ def _card(
 
 def app(page: ft.Page) -> None:
     page.title = APP_NAME
-    page.fonts = {"Meslo": "fonts/Meslo.ttf"}
+    page.fonts = {
+        "Meslo": f"fonts/{'meslo_bold.ttf' if IS_WINDOWS else 'meslo.ttf'}"
+    }
     page.theme = ft.Theme(font_family="Meslo")
 
     page.window.resizable = False
@@ -197,6 +203,8 @@ def app(page: ft.Page) -> None:
     page.window.width = 500
     page.window.height = 600
 
+    page.bgcolor = ft.Colors.WHITE
+
     player_state = PlayerState()
     misc_state = MiscState()
 
@@ -204,7 +212,7 @@ def app(page: ft.Page) -> None:
         not_playing = not player_state.is_playing
 
         if not_playing and player_state.audio_path:
-            play(player_state.audio_path, reset_volume=False, bounce=False)
+            _play(player_state.audio_path, reset_volume=False, bounce=False)
 
         if not_playing:
             return
@@ -319,9 +327,9 @@ def app(page: ft.Page) -> None:
     )
 
     # Navigate directories...
-    def navigate(path: str) -> None:
+    def _navigate(path: str) -> None:
         misc_state.curr_dir = path
-        render_elements()
+        _render_elements()
 
     def _reset_player(
             hard_reset: bool = False,
@@ -363,7 +371,7 @@ def app(page: ft.Page) -> None:
         bottom_div.update()
 
     # Play audio file...
-    def play(path: str, reset_volume: bool = True, bounce: bool = True) -> None:
+    def _play(path: str, reset_volume: bool = True, bounce: bool = True) -> None:
         if path == player_state.audio_path and player_state.is_playing:
             _toggle_playback()
             return
@@ -422,7 +430,7 @@ def app(page: ft.Page) -> None:
 
         _draw()
 
-    def render_elements() -> None:
+    def _render_elements() -> None:
         items = []
         misc_state.indicators = {}
         curr_dir = misc_state.curr_dir
@@ -435,7 +443,7 @@ def app(page: ft.Page) -> None:
                     ft.ListTile(
                         leading=_icon(ft.Icons.ARROW_BACK),
                         title=_text(".."),
-                        on_click=lambda _: navigate(os.path.dirname(curr_dir))
+                        on_click=lambda _: _navigate(os.path.dirname(curr_dir))
                     ),
                     add_padding=len(entries) > 0,
                     timing=Timing.END
@@ -453,7 +461,7 @@ def app(page: ft.Page) -> None:
                         ft.ListTile(
                             leading=_icon(ft.Icons.FOLDER),
                             title=_text(entry),
-                            on_click=lambda _, _path=full_path: navigate(_path)
+                            on_click=lambda _, _path=full_path: _navigate(_path)
                         ),
                         add_padding=add_padding,
                         timing=Timing.END
@@ -476,7 +484,7 @@ def app(page: ft.Page) -> None:
                             leading=_icon(ft.Icons.AUDIO_FILE),
                             title=_text(entry),
                             trailing=indicator,
-                            on_click=lambda _, path=full_path: play(path)
+                            on_click=lambda _, path=full_path: _play(path)
                         ),
                         add_padding=add_padding
                     )
@@ -568,7 +576,7 @@ def app(page: ft.Page) -> None:
             _draw(manual_update=False)
             await asyncio.sleep(0.01)  # Automatically update draw...
 
-    render_elements()
+    _render_elements()
     page.run_task(draw)
     page.update()
 
@@ -581,10 +589,14 @@ def app(page: ft.Page) -> None:
 
 
 def main() -> None:
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+    kwargs = {} if IS_WINDOWS else {"view": None if IS_WINDOWS else ft.AppView.FLET_APP_HIDDEN}
+
     ft.run(
         app,
-        view=ft.AppView.FLET_APP_HIDDEN,
-        assets_dir=SCRIPT_DIR
+        assets_dir=SCRIPT_DIR,
+        **kwargs
     )
 
 
