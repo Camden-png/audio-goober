@@ -1,11 +1,10 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import os
-import platform
 import sys
 from typing import (
-    Any, Dict, Optional, Tuple
+    Any, Dict, List, Optional, Tuple
 )
 import wave
 
@@ -27,6 +26,7 @@ INVISIBLE = ""
 PROGRESS_BAR_WIDTH = 300
 DEFAULT_VOLUME = 1.0
 MAX_VOLUME = 3.0
+VOLUME_SMALL_NUDGE = 0.05
 VOLUME_NUDGE = 0.25
 NUM_DIGITS = len(
     str(VOLUME_NUDGE).split(".")[-1]
@@ -39,8 +39,10 @@ SCALE_DEFAULT = 1.0
 SCALE_HOVER = 1.02
 SCALE_HOVER_DURATION = 50
 
-SCALE_PRESS = 0.98
-SCALE_PRESS_DURATION = 100
+SCALE_CLICK = 0.98
+SCALE_CLICK_DURATION = 100
+
+SCALE_BOUNCE = 0.96
 
 
 class Timing(Enum):
@@ -69,7 +71,7 @@ class PlayerState:
 @dataclass
 class MiscState:
     curr_dir: str = PROCESSED_DIR
-    indicators: Optional[Dict] = None
+    indicators: Dict = field(default_factory=dict)
 
 
 def _text(text: Optional[str] = None, **kwargs) -> ft.Text:
@@ -80,11 +82,11 @@ def _text(text: Optional[str] = None, **kwargs) -> ft.Text:
 
 
 def _icon(icon: str, **kwargs) -> ft.Icon:
-    return ft.Icon(icon, color=ft.Colors.BLACK, **kwargs)
+    return ft.Icon(icon, color=ft.Colors.BLACK, **kwargs)  # noqa
 
 
 def _icon_button(icon: str, **kwargs) -> ft.IconButton:
-    return ft.IconButton(icon=icon, icon_color=ft.Colors.BLACK, **kwargs)
+    return ft.IconButton(icon=icon, icon_color=ft.Colors.BLACK, **kwargs)  # noqa
 
 
 def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
@@ -107,13 +109,14 @@ def _shadow(**kwargs) -> ft.BoxShadow:
     )
 
 
-def _press_animation() -> ft.Animation:
-    return ft.Animation(SCALE_PRESS_DURATION, ft.AnimationCurve.EASE_OUT)
+def _click_animation_scale() -> ft.Animation:
+    return ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_OUT)
 
 
-def _hover(
+def _hover_and_click_animation(
         container: ft.Container,
         on_click: Optional[Any] = None,
+        on_hover: Optional[Any] = None,
         timing: Optional[Timing] = None
 ) -> None:
     container.scale = SCALE_DEFAULT
@@ -121,16 +124,17 @@ def _hover(
     def _on_hover(event: ft.ControlEvent) -> None:
         container.animate_scale = ft.Animation(SCALE_HOVER_DURATION, ft.AnimationCurve.EASE_IN_OUT)
         container.scale = SCALE_HOVER if event.data else SCALE_DEFAULT
+        if on_hover:
+            on_hover(event)
         container.update()
 
-    # Mouse button down...
-    def _on_tap_down(event: ft.ControlEvent) -> None:
-        container.animate_scale = _press_animation()
-        container.scale = SCALE_PRESS
+    def _on_click(event: ft.ControlEvent) -> None:
+        container.animate_scale = _click_animation_scale()
+        container.scale = SCALE_CLICK
         container.update()
 
-        async def _press() -> None:
-            await asyncio.sleep(SCALE_PRESS_DURATION / 1000)
+        async def _click() -> None:
+            await asyncio.sleep(SCALE_CLICK_DURATION / 1000)
             if timing is Timing.END:
                 on_click(event)
             try:
@@ -139,19 +143,20 @@ def _hover(
             except RuntimeError:
                 pass
 
-        container.page.run_task(_press)
+        container.page.run_task(_click)
 
         if on_click and timing is Timing.START:
             on_click(event)
 
     container.on_hover = _on_hover
-    container.on_tap_down = _on_tap_down
+    container.on_tap_down = _on_click
 
 
 def _card(
         tile: ft.ListTile,
         add_padding: bool = False,
         timing: Timing = Timing.START,
+        on_hover: Optional[Any] = None,
         **kwargs
 ) -> ft.Column:
     tile.mouse_cursor = ft.MouseCursor.CLICK
@@ -162,16 +167,16 @@ def _card(
         border_radius=6,
         bgcolor=ft.Colors.WHITE,
         shadow=_shadow(),
-        animate_scale=_press_animation()
+        animate_scale=_click_animation_scale()
     )
 
     # Bubble-up tile's `on_click` event to container...
     # (Otherwise the tile consumes the event and the container's `on_click` never fires...)
     _on_click = tile.on_click
-    _hover(container, on_click=_on_click, timing=timing)
+    _hover_and_click_animation(container, on_click=_on_click, on_hover=on_hover, timing=timing)
     tile.on_click = None
 
-    items = [container]
+    items: List[Any] = [container]
     if add_padding:
         # `GestureDetector(...)` used as padding b.c. can
         # disable all ink & set mouse cursor...
@@ -209,11 +214,11 @@ def app(page: ft.Page) -> None:
     player_state = PlayerState()
     misc_state = MiscState()
 
-    def _toggle_playback() -> None:
+    def _toggle_playback_or_replay() -> None:
         not_playing = not player_state.is_playing
 
-        if not_playing and player_state.audio_path:
-            _play(player_state.audio_path, reset_volume=False, bounce=False)
+        if not_playing and player_state.audio_path:  # Replay...
+            _play(player_state.audio_path, fresh_play=False)
 
         if not_playing:
             return
@@ -221,10 +226,16 @@ def app(page: ft.Page) -> None:
         player_state.is_paused = not player_state.is_paused
         _draw()
 
-    def _adjust_volume(delta: float) -> None:
+    def _adjust_volume(delta: float, small_delta: float, delta_threshold: float = 0.25) -> None:
         # Allow changes to volume for finished audio...
         if not player_state.audio_path:
             return
+
+        if (
+                player_state.volume < delta_threshold or
+                (player_state.volume == delta_threshold and small_delta < 0)
+        ):
+            delta = small_delta
 
         player_state.volume = max(
             0.0, min(MAX_VOLUME, round(player_state.volume + delta, NUM_DIGITS))
@@ -235,15 +246,15 @@ def app(page: ft.Page) -> None:
         _draw()
 
     pause_button = _icon_button(
-        ft.Icons.PLAY_ARROW, on_click=lambda _: _toggle_playback()
+        ft.Icons.PLAY_ARROW, on_click=lambda _: _toggle_playback_or_replay()  # noqa
     )
 
     volume_up_button = _icon_button(
-        ft.Icons.ADD, on_click=lambda _: _adjust_volume(VOLUME_NUDGE)
+        ft.Icons.ADD, on_click=lambda _: _adjust_volume(VOLUME_NUDGE, VOLUME_SMALL_NUDGE)  # noqa
     )
 
     volume_down_button = _icon_button(
-        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume(-VOLUME_NUDGE)
+        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume(-VOLUME_NUDGE, -VOLUME_SMALL_NUDGE)  # noqa
     )
 
     for button in [pause_button, volume_up_button, volume_down_button]:
@@ -324,7 +335,7 @@ def app(page: ft.Page) -> None:
         ),
         padding=20,
         scale=SCALE_DEFAULT,
-        animate_scale=ft.Animation(SCALE_PRESS_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+        animate_scale=ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_IN_OUT)
     )
 
     # Navigate directories...
@@ -364,22 +375,22 @@ def app(page: ft.Page) -> None:
             progress_bar.value = 0
 
     async def _bounce_player() -> None:
-        bottom_div.animate_scale = ft.Animation(SCALE_PRESS_DURATION, ft.AnimationCurve.EASE_IN_OUT)
-        bottom_div.scale = SCALE_PRESS - 0.02
+        bottom_div.animate_scale = ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+        bottom_div.scale = SCALE_BOUNCE
         bottom_div.update()
-        await asyncio.sleep(SCALE_PRESS_DURATION / 1000)
+        await asyncio.sleep(SCALE_CLICK_DURATION / 1000)
         bottom_div.scale = SCALE_DEFAULT
         bottom_div.update()
 
     # Play audio file...
-    def _play(path: str, reset_volume: bool = True, bounce: bool = True) -> None:
+    def _play(path: str, fresh_play: bool = True) -> None:
         if path == player_state.audio_path and player_state.is_playing:
-            _toggle_playback()
+            _toggle_playback_or_replay()
             return
 
-        _reset_player(reset_volume=reset_volume)
+        _reset_player(reset_volume=fresh_play)
 
-        if bounce:
+        if fresh_play:
             page.run_task(_bounce_player)
 
         # Load WAV frames...
@@ -429,6 +440,12 @@ def app(page: ft.Page) -> None:
             stream_callback=_callback
         )
 
+        # Forcefully show close button (after user clicks & is hovering)...
+        if fresh_play:
+            _, close_button = misc_state.indicators.get(path, (None, None))
+            if close_button:
+                close_button.visible = True
+
         _draw()
 
     def _render_elements() -> None:
@@ -442,7 +459,7 @@ def app(page: ft.Page) -> None:
             items.append(
                 _card(
                     ft.ListTile(
-                        leading=_icon(ft.Icons.ARROW_BACK),
+                        leading=_icon(ft.Icons.ARROW_BACK),  # noqa
                         title=_text(".."),
                         on_click=lambda _: _navigate(os.path.dirname(curr_dir))
                     ),
@@ -460,7 +477,7 @@ def app(page: ft.Page) -> None:
                 items.append(
                     _card(
                         ft.ListTile(
-                            leading=_icon(ft.Icons.FOLDER),
+                            leading=_icon(ft.Icons.FOLDER),  # noqa
                             title=_text(entry),
                             on_click=lambda _, _path=full_path: _navigate(_path)
                         ),
@@ -475,19 +492,41 @@ def app(page: ft.Page) -> None:
                     width=18,
                     height=18,
                     border_radius=2,
+                    margin=ft.Margin.only(right=6),
                     bgcolor=ft.Colors.RED,
                     visible=False
                 )
-                misc_state.indicators[full_path] = indicator
+
+                # TODO: add click functionality!
+                close_button = _icon_button(
+                    ft.Icons.CLOSE_OUTLINED,  # noqa
+                    visible=False,
+                    padding=ft.Padding.all(0)
+                )
+
+                misc_state.indicators[full_path] = (indicator, close_button)
+
+                def _on_entry_hover(event: ft.ControlEvent, _path: str = full_path) -> None:
+                    _, _close_button = misc_state.indicators.get(_path, (None, None))
+                    if _close_button and _path == player_state.audio_path:
+                        _close_button.visible = event.data
+
                 items.append(
                     _card(
                         ft.ListTile(
-                            leading=_icon(ft.Icons.AUDIO_FILE),
+                            leading=_icon(ft.Icons.AUDIO_FILE),  # noqa
                             title=_text(entry),
-                            trailing=indicator,
+                            trailing=ft.Row(
+                                [indicator, close_button],
+                                spacing=6,
+                                tight=True,  # Prevents attempt to take up all space...
+                                alignment=ft.MainAxisAlignment.END
+                            ),
+                            content_padding=ft.Padding.only(left=16, right=16),
                             on_click=lambda _, path=full_path: _play(path)
                         ),
-                        add_padding=add_padding
+                        add_padding=add_padding,
+                        on_hover=_on_entry_hover
                     )
                 )
 
@@ -532,6 +571,8 @@ def app(page: ft.Page) -> None:
 
         just_finished = player_state.is_playing and not is_playing
 
+        update_page = False
+
         if is_playing or just_finished or manual_update:
             # Enable buttons...
             _toggle_clickability(pause_button, enabled=True)
@@ -558,19 +599,23 @@ def app(page: ft.Page) -> None:
                 pause_button.icon = ft.Icons.PLAY_ARROW if player_state.is_paused else ft.Icons.PAUSE
 
             # Active indicator...
-            if misc_state.indicators:
-                for path, indicator in misc_state.indicators.items():
-                    if path == player_state.audio_path:
-                        indicator.visible = True
-                        indicator.opacity = 0.3 if player_state.is_paused else 1.0
-                    else:
-                        indicator.visible = False
+            for path, (indicator, close_button) in misc_state.indicators.items():
+                if path == player_state.audio_path:
+                    indicator.visible = True
+                    indicator.opacity = 0.3 if player_state.is_paused else 1.0
+                else:
+                    indicator.visible = False
+                    close_button.visible = False
+
+            update_page = True
 
         if just_finished:
             _reset_player(reset_volume=False, reset_bar=False)
             pause_button.icon = ft.Icons.RESTART_ALT
+            update_page = True
 
-        page.update()
+        if update_page:
+            page.update()
 
     async def draw() -> None:
         while True:
@@ -592,12 +637,10 @@ def app(page: ft.Page) -> None:
 def main() -> None:
     os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-    kwargs = {} if IS_WINDOWS else {"view": None if IS_WINDOWS else ft.AppView.FLET_APP_HIDDEN}
-
     ft.run(
         app,
         assets_dir=SCRIPT_DIR,
-        **kwargs
+        **({} if IS_WINDOWS else {"view": ft.AppView.FLET_APP_HIDDEN})
     )
 
 
