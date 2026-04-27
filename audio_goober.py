@@ -72,6 +72,7 @@ class PlayerState:
 class MiscState:
     curr_dir: str = PROCESSED_DIR
     indicators: Dict = field(default_factory=dict)
+    title_dots: List = field(default_factory=list)
 
 
 def _text(text: Optional[str] = None, **kwargs) -> ft.Text:
@@ -122,9 +123,16 @@ def _hover_and_click_animation(
 ) -> None:
     container.scale = SCALE_DEFAULT
 
+    # Tracks whether the mouse is over this container, so the
+    # async click handler can restore the correct scale if the
+    # mouse leaves before the click animation finishes...
+    _is_hovering = False
+
     def _on_hover(event: ft.ControlEvent) -> None:
+        nonlocal _is_hovering
+        _is_hovering = event.data
         container.animate_scale = ft.Animation(SCALE_HOVER_DURATION, ft.AnimationCurve.EASE_IN_OUT)
-        container.scale = SCALE_HOVER if event.data else SCALE_DEFAULT
+        container.scale = SCALE_HOVER if _is_hovering else SCALE_DEFAULT
         if on_hover:
             on_hover(event)
         container.update()
@@ -139,7 +147,7 @@ def _hover_and_click_animation(
             if timing is Timing.END:
                 on_click(event)
             try:
-                container.scale = SCALE_HOVER
+                container.scale = SCALE_HOVER if _is_hovering else SCALE_DEFAULT
                 container.update()
             except RuntimeError:
                 pass
@@ -583,21 +591,32 @@ def app(page: ft.Page) -> None:
                     )
                 )
 
+        is_main_page = curr_dir == PROCESSED_DIR
+        title_text = APP_NAME if is_main_page else os.path.relpath(curr_dir, PROCESSED_DIR)
+
+        title_dots = [
+            _text(".", size=24, weight=ft.FontWeight.BOLD, opacity=0, animate_opacity=300)
+            for _ in range(3)
+        ] if is_main_page else []
+        misc_state.title_dots = title_dots
+
         page.controls.clear()
         page.controls.append(
             ft.Column(
                 [
-                    _text(
-                        spans=[
-                            ft.TextSpan("> "),
-                            ft.TextSpan(
-                                os.path.relpath(curr_dir, PROCESSED_DIR)
-                                if curr_dir != PROCESSED_DIR else APP_NAME,
-                                ft.TextStyle(italic=True)
-                            )
+                    ft.Row(
+                        [
+                            _text(
+                                spans=[
+                                    ft.TextSpan("> "),
+                                    ft.TextSpan(title_text, ft.TextStyle(italic=True))
+                                ],
+                                size=24,
+                                weight=ft.FontWeight.BOLD
+                            ),
+                            *title_dots
                         ],
-                        size=24,
-                        weight=ft.FontWeight.BOLD
+                        spacing=0
                     ),
                     ft.Container(
                         content=ft.Divider(thickness=2, color=ft.Colors.BLACK),
@@ -644,6 +663,51 @@ def app(page: ft.Page) -> None:
 
     _render_elements()
     page.run_task(_draw)
+
+    async def _animate_title() -> None:
+        prev_dots: Optional[List[ft.Text]] = None
+
+        while True:
+            dots = misc_state.title_dots
+            if not page.window.visible or not dots:
+                await asyncio.sleep(0.01)
+                continue
+
+            # First load - initial delay...
+            if prev_dots is None:
+                prev_dots = dots
+                await asyncio.sleep(1.25)
+                continue
+
+            # Navigated back to main page - reset cycle...
+            if dots is not prev_dots:
+                prev_dots = dots
+                for dot in dots:
+                    dot.opacity = 0
+                    dot.update()
+                await asyncio.sleep(0.25)
+                continue
+
+            # Fade in one by one...
+            for dot in dots:
+                try:
+                    dot.opacity = 1
+                    dot.update()
+                except RuntimeError:
+                    break
+                await asyncio.sleep(0.75)
+
+            # Fade all out...
+            for dot in dots:
+                try:
+                    dot.opacity = 0
+                    dot.update()
+                except RuntimeError:
+                    break
+            await asyncio.sleep(0.75)
+
+    page.run_task(_animate_title)
+
     page.update()
 
     async def _show_window() -> None:
