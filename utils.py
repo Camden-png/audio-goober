@@ -130,7 +130,6 @@ def get_bundles_dict(_dir: str = RAW_DIR) -> Dict[str, Any]:
 
     # Recurse through files...
     for root, _, files in os.walk(_dir):
-
         for _file in files:
             key = os.path.relpath(root, RAW_DIR)
             is_bundle = key != "."
@@ -157,9 +156,8 @@ def get_bundles_dict(_dir: str = RAW_DIR) -> Dict[str, Any]:
     # Process metadata files...
     for key, files_dict in metadata_dict.items():
         for _file, override_dict in files_dict.items():
-            if _file not in bundles_dict[key]:
-                continue
-            bundles_dict[key][_file].update(override_dict)
+            if _file in bundles_dict[key]:
+                bundles_dict[key][_file].update(override_dict)
 
     return bundles_dict
 

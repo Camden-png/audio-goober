@@ -4,7 +4,7 @@ from enum import Enum
 import os
 import sys
 from typing import (
-    Any, Dict, List, Optional, Tuple
+    Any, Dict, List, Optional, Tuple, Union
 )
 import wave
 
@@ -81,17 +81,18 @@ def _text(text: Optional[str] = None, **kwargs) -> ft.Text:
     return ft.Text(**kwargs)
 
 
-def _icon(icon: str, **kwargs) -> ft.Icon:
-    return ft.Icon(icon, color=ft.Colors.BLACK, **kwargs)  # noqa
+def _icon(icon: Union[str, ft.IconData], **kwargs) -> ft.Icon:
+    return ft.Icon(icon, color=ft.Colors.BLACK, **kwargs)
 
 
-def _icon_button(icon: str, **kwargs) -> ft.IconButton:
-    return ft.IconButton(icon=icon, icon_color=ft.Colors.BLACK, **kwargs)  # noqa
+def _icon_button(icon: Union[str, ft.IconData], **kwargs) -> ft.IconButton:
+    return ft.IconButton(icon=icon, icon_color=ft.Colors.BLACK, **kwargs)
 
 
 def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
     control.disabled = not enabled
-    control.mouse_cursor = ft.MouseCursor.CLICK if enabled else ft.MouseCursor.FORBIDDEN
+    if not IS_WINDOWS:
+        control.mouse_cursor = ft.MouseCursor.CLICK if enabled else ft.MouseCursor.FORBIDDEN
     control.icon_color = ft.Colors.BLACK if enabled else ft.Colors.GREY_500
 
 
@@ -246,19 +247,16 @@ def app(page: ft.Page) -> None:
         _draw()
 
     pause_button = _icon_button(
-        ft.Icons.PLAY_ARROW, on_click=lambda _: _toggle_playback_or_replay()  # noqa
+        ft.Icons.PLAY_ARROW, on_click=lambda _: _toggle_playback_or_replay()
     )
 
     volume_up_button = _icon_button(
-        ft.Icons.ADD, on_click=lambda _: _adjust_volume(VOLUME_NUDGE, VOLUME_SMALL_NUDGE)  # noqa
+        ft.Icons.ADD, on_click=lambda _: _adjust_volume(VOLUME_NUDGE, VOLUME_SMALL_NUDGE)
     )
 
     volume_down_button = _icon_button(
-        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume(-VOLUME_NUDGE, -VOLUME_SMALL_NUDGE)  # noqa
+        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume(-VOLUME_NUDGE, -VOLUME_SMALL_NUDGE)
     )
-
-    for button in [pause_button, volume_up_button, volume_down_button]:
-        _toggle_clickability(button, enabled=False)
 
     progress_bar = ft.ProgressBar(
         value=0,
@@ -459,7 +457,7 @@ def app(page: ft.Page) -> None:
             items.append(
                 _card(
                     ft.ListTile(
-                        leading=_icon(ft.Icons.ARROW_BACK),  # noqa
+                        leading=_icon(ft.Icons.ARROW_BACK),
                         title=_text(".."),
                         on_click=lambda _: _navigate(os.path.dirname(curr_dir))
                     ),
@@ -477,7 +475,7 @@ def app(page: ft.Page) -> None:
                 items.append(
                     _card(
                         ft.ListTile(
-                            leading=_icon(ft.Icons.FOLDER),  # noqa
+                            leading=_icon(ft.Icons.FOLDER),
                             title=_text(entry),
                             on_click=lambda _, _path=full_path: _navigate(_path)
                         ),
@@ -497,11 +495,15 @@ def app(page: ft.Page) -> None:
                     visible=False
                 )
 
+                def _close() -> None:
+                    _reset_player(hard_reset=True)
+                    _draw()
+
                 # TODO: add click functionality!
                 close_button = _icon_button(
-                    ft.Icons.CLOSE_OUTLINED,  # noqa
+                    ft.Icons.CLOSE_OUTLINED,
                     visible=False,
-                    padding=ft.Padding.all(0)
+                    on_click=_close
                 )
 
                 misc_state.indicators[full_path] = (indicator, close_button)
@@ -514,7 +516,7 @@ def app(page: ft.Page) -> None:
                 items.append(
                     _card(
                         ft.ListTile(
-                            leading=_icon(ft.Icons.AUDIO_FILE),  # noqa
+                            leading=_icon(ft.Icons.AUDIO_FILE),
                             title=_text(entry),
                             trailing=ft.Row(
                                 [indicator, close_button],
@@ -585,10 +587,13 @@ def app(page: ft.Page) -> None:
             progress_bar.value = min(elapsed / duration, 1.0) if duration else 0.0
 
             # Current audio file...
-            audio_name = os.path.basename(player_state.audio_path)
-            player_text.value = (
-                f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
-            )
+            if player_state.audio_path:
+                audio_name = os.path.basename(player_state.audio_path)
+                player_text.value = (
+                    f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
+                )
+            else:
+                is_playing = False
 
             # Volume...
             _volume = format(player_state.volume, f".{NUM_DIGITS}f")
@@ -608,6 +613,12 @@ def app(page: ft.Page) -> None:
                     close_button.visible = False
 
             update_page = True
+
+        # Hacky...
+        if not is_playing:
+            pause_button.icon = ft.Icons.PLAY_ARROW
+            for button in [pause_button, volume_up_button, volume_down_button]:
+                _toggle_clickability(button, enabled=False)
 
         if just_finished:
             _reset_player(reset_volume=False, reset_bar=False)
