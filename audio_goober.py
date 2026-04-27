@@ -215,6 +215,17 @@ def app(page: ft.Page) -> None:
     player_state = PlayerState()
     misc_state = MiscState()
 
+    def _update_indicators() -> None:
+        for path, (indicator, close_button) in misc_state.indicators.items():
+            if path == player_state.audio_path:
+                indicator.visible = True
+                indicator.opacity = 0.3 if player_state.is_paused else 1.0
+            else:
+                indicator.visible = False
+                close_button.visible = False
+            indicator.update()
+            close_button.update()
+
     def _toggle_playback_or_replay() -> None:
         not_playing = not player_state.is_playing
 
@@ -225,9 +236,15 @@ def app(page: ft.Page) -> None:
             return
 
         player_state.is_paused = not player_state.is_paused
-        _draw()
+        pause_button.icon = ft.Icons.PLAY_ARROW if player_state.is_paused else ft.Icons.PAUSE
+        _update_indicators()
+        bottom_div.update()
 
-    def _adjust_volume(delta: float, small_delta: float, delta_threshold: float = 0.25) -> None:
+    def _update_volume() -> None:
+        _volume = format(player_state.volume, f".{NUM_DIGITS}f")
+        volume_text.value = f"> volume: {_volume}"
+
+    def _adjust_volume_nudge(delta: float, small_delta: float, delta_threshold: float = 0.25) -> None:
         # Allow changes to volume for finished audio...
         if not player_state.audio_path:
             return
@@ -244,19 +261,26 @@ def app(page: ft.Page) -> None:
 
         _toggle_clickability(volume_up_button, enabled=player_state.volume < MAX_VOLUME)
         _toggle_clickability(volume_down_button, enabled=player_state.volume > 0.0)
-        _draw()
+        _update_volume()
+        bottom_div.update()
 
     pause_button = _icon_button(
         ft.Icons.PLAY_ARROW, on_click=lambda _: _toggle_playback_or_replay()
     )
 
     volume_up_button = _icon_button(
-        ft.Icons.ADD, on_click=lambda _: _adjust_volume(VOLUME_NUDGE, VOLUME_SMALL_NUDGE)
+        ft.Icons.ADD, on_click=lambda _: _adjust_volume_nudge(VOLUME_NUDGE, VOLUME_SMALL_NUDGE)
     )
 
     volume_down_button = _icon_button(
-        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume(-VOLUME_NUDGE, -VOLUME_SMALL_NUDGE)
+        ft.Icons.REMOVE, on_click=lambda _: _adjust_volume_nudge(-VOLUME_NUDGE, -VOLUME_SMALL_NUDGE)
     )
+
+    def _disable_buttons() -> None:
+        for button in [pause_button, volume_up_button, volume_down_button]:
+            _toggle_clickability(button, enabled=False)
+
+    _disable_buttons()
 
     progress_bar = ft.ProgressBar(
         value=0,
@@ -444,7 +468,22 @@ def app(page: ft.Page) -> None:
             if close_button:
                 close_button.visible = True
 
-        _draw()
+        _update_indicators()
+
+        # Set up UI for active playback...
+        _toggle_clickability(pause_button, enabled=True)
+        _toggle_clickability(volume_up_button, enabled=player_state.volume < MAX_VOLUME)
+        _toggle_clickability(volume_down_button, enabled=player_state.volume > 0.0)
+        pause_button.icon = ft.Icons.PAUSE
+
+        elapsed = player_state.frame_pos / SAMPLE_RATE
+        duration = player_state.total_frames / SAMPLE_RATE
+        progress_bar.value = min(elapsed / duration, 1.0) if duration else 0.0
+
+        audio_name = os.path.basename(player_state.audio_path)
+        player_text.value = f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
+        _update_volume()
+        bottom_div.update()
 
     def _render_elements() -> None:
         items = []
@@ -497,13 +536,25 @@ def app(page: ft.Page) -> None:
 
                 def _close() -> None:
                     _reset_player(hard_reset=True)
-                    _draw()
+                    _update_indicators()
+                    _disable_buttons()
 
-                # TODO: add click functionality!
-                close_button = _icon_button(
-                    ft.Icons.CLOSE_OUTLINED,
+                    pause_button.icon = ft.Icons.PLAY_ARROW
+                    volume_text.value = INVISIBLE
+                    bottom_div.update()
+
+                # `GestureDetector` wraps the close button to prevent the
+                # tap event from bubbling up to the card's `on_tap_down`,
+                # which would trigger the scale animation and `_play`...
+                # `on_tap_down=lambda _: None` separates event internally...
+                close_button = ft.GestureDetector(
+                    content=_icon_button(
+                        ft.Icons.CLOSE_OUTLINED,
+                        mouse_cursor=ft.MouseCursor.CLICK,
+                        on_click=_close
+                    ),
                     visible=False,
-                    on_click=_close
+                    on_tap_down=lambda _: None
                 )
 
                 misc_state.indicators[full_path] = (indicator, close_button)
@@ -565,80 +616,39 @@ def app(page: ft.Page) -> None:
         )
         page.update()
 
-    def _draw(manual_update: bool = True) -> None:
-        is_playing = (
-            player_state.is_playing and
-            player_state.stream and player_state.stream.is_active()
-        )
-
-        just_finished = player_state.is_playing and not is_playing
-
-        update_page = False
-
-        if is_playing or just_finished or manual_update:
-            # Enable buttons...
-            _toggle_clickability(pause_button, enabled=True)
-            _toggle_clickability(volume_up_button, enabled=player_state.volume < MAX_VOLUME)
-            _toggle_clickability(volume_down_button, enabled=player_state.volume > 0.0)
-
-            # Progress bar...
+    def _update_bottom_div() -> None:
+        # Progress tick...
+        if player_state.stream.is_active():
             elapsed = player_state.frame_pos / SAMPLE_RATE
             duration = player_state.total_frames / SAMPLE_RATE
             progress_bar.value = min(elapsed / duration, 1.0) if duration else 0.0
 
-            # Current audio file...
-            if player_state.audio_path:
-                audio_name = os.path.basename(player_state.audio_path)
-                player_text.value = (
-                    f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
-                )
-            else:
-                is_playing = False
+            audio_name = os.path.basename(player_state.audio_path)
+            player_text.value = f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
 
-            # Volume...
-            _volume = format(player_state.volume, f".{NUM_DIGITS}f")
-            volume_text.value = f"> volume: {_volume}"
-
-            # Restart...
-            if is_playing:
-                pause_button.icon = ft.Icons.PLAY_ARROW if player_state.is_paused else ft.Icons.PAUSE
-
-            # Active indicator...
-            for path, (indicator, close_button) in misc_state.indicators.items():
-                if path == player_state.audio_path:
-                    indicator.visible = True
-                    indicator.opacity = 0.3 if player_state.is_paused else 1.0
-                else:
-                    indicator.visible = False
-                    close_button.visible = False
-
-            update_page = True
-
-        # Hacky...
-        if not is_playing:
-            pause_button.icon = ft.Icons.PLAY_ARROW
-            for button in [pause_button, volume_up_button, volume_down_button]:
-                _toggle_clickability(button, enabled=False)
-
-        if just_finished:
+        # Track just finished...
+        else:
             _reset_player(reset_volume=False, reset_bar=False)
+            _toggle_clickability(pause_button, enabled=True)
+            _toggle_clickability(volume_up_button, enabled=player_state.volume < MAX_VOLUME)
+            _toggle_clickability(volume_down_button, enabled=player_state.volume > 0.0)
             pause_button.icon = ft.Icons.RESTART_ALT
-            update_page = True
 
-        if update_page:
-            page.update()
+        bottom_div.update()
 
-    async def draw() -> None:
+    async def _draw() -> None:
         while True:
-            _draw(manual_update=False)
-            await asyncio.sleep(0.01)  # Automatically update draw...
+            if player_state.is_playing and player_state.stream:
+                _update_bottom_div()
+            await asyncio.sleep(0.01)
 
     _render_elements()
-    page.run_task(draw)
+    page.run_task(_draw)
     page.update()
 
     async def _show_window() -> None:
-        await asyncio.sleep(1)
+        if not IS_WINDOWS:
+            await asyncio.sleep(1)
         page.window.visible = True
         page.update()
 
