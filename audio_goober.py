@@ -87,13 +87,17 @@ def _icon(icon: Union[str, ft.IconData], **kwargs) -> ft.Icon:
 
 
 def _icon_button(icon: Union[str, ft.IconData], **kwargs) -> ft.IconButton:
-    return ft.IconButton(icon=icon, icon_color=ft.Colors.BLACK, **kwargs)
+    return ft.IconButton(
+        icon=icon,
+        icon_color=ft.Colors.BLACK,
+        mouse_cursor=ft.MouseCursor.CLICK,
+        **kwargs
+    )
 
 
 def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
     control.disabled = not enabled
-    if not IS_WINDOWS:
-        control.mouse_cursor = ft.MouseCursor.CLICK if enabled else ft.MouseCursor.FORBIDDEN
+    control.mouse_cursor = ft.MouseCursor.CLICK if enabled else (ft.MouseCursor.BASIC if IS_WINDOWS else ft.MouseCursor.FORBIDDEN)
     control.icon_color = ft.Colors.BLACK if enabled else ft.Colors.GREY_500
 
 
@@ -558,7 +562,6 @@ def app(page: ft.Page) -> None:
                 close_button = ft.GestureDetector(
                     content=_icon_button(
                         ft.Icons.CLOSE_OUTLINED,
-                        mouse_cursor=ft.MouseCursor.CLICK,
                         on_click=_close
                     ),
                     visible=False,
