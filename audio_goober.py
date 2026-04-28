@@ -142,6 +142,11 @@ def _hover_and_click_animation(
         container.update()
 
     def _on_click(event: ft.ControlEvent) -> None:
+        # If suppressed reset it...
+        if getattr(container, "_suppress", False):
+            container._suppress = False
+            return
+
         container.animate_scale = _click_animation_scale()
         container.scale = SCALE_CLICK
         container.update()
@@ -171,7 +176,7 @@ def _card(
         timing: Timing = Timing.START,
         on_hover: Optional[Any] = None,
         **kwargs
-) -> ft.Column:
+) -> Tuple[ft.Column, ft.Container]:
     tile.mouse_cursor = ft.MouseCursor.CLICK
 
     container = ft.Container(
@@ -186,7 +191,7 @@ def _card(
     # Bubble-up tile's `on_click` event to container...
     # (Otherwise the tile consumes the event and the container's `on_click` never fires...)
     _on_click = tile.on_click
-    _hover_and_click_animation(container, on_click=_on_click, on_hover=on_hover, timing=timing)
+    _hover_and_click_animation(container, _on_click, on_hover, timing)
     tile.on_click = None
 
     items: List[Any] = [container]
@@ -201,11 +206,13 @@ def _card(
             )
         )
 
-    return ft.Column(
+    card = ft.Column(
         items,
         spacing=0,
         **kwargs
     )
+
+    return card, container
 
 
 def app(page: ft.Page) -> None:
@@ -514,7 +521,7 @@ def app(page: ft.Page) -> None:
                     ),
                     add_padding=len(entries) > 0,
                     timing=Timing.END
-                )
+                )[0]
             )
 
         for i, entry in enumerate(entries):
@@ -532,7 +539,7 @@ def app(page: ft.Page) -> None:
                         ),
                         add_padding=add_padding,
                         timing=Timing.END
-                    )
+                    )[0]
                 )
 
             # Render audio files...
@@ -553,19 +560,18 @@ def app(page: ft.Page) -> None:
 
                     pause_button.icon = ft.Icons.PLAY_ARROW
                     volume_text.value = INVISIBLE
+                    page.run_task(_bounce_player)
                     bottom_div.update()
 
-                # `GestureDetector` wraps the close button to prevent the
-                # tap event from bubbling up to the card's `on_tap_down`,
-                # which would trigger the scale animation and `_play`...
-                # `on_tap_down=lambda _: None` separates event internally...
+                # `GestureDetector` wraps the close button so its
+                # `on_tap_down` sets `_suppress` on the card container,
+                # preventing the card's press animation from firing...
                 close_button = ft.GestureDetector(
                     content=_icon_button(
                         ft.Icons.CLOSE_OUTLINED,
                         on_click=_close
                     ),
-                    visible=False,
-                    on_tap_down=lambda _: None
+                    visible=False
                 )
 
                 misc_state.indicators[full_path] = (indicator, close_button)
@@ -575,24 +581,25 @@ def app(page: ft.Page) -> None:
                     if _close_button and _path == player_state.audio_path:
                         _close_button.visible = event.data
 
-                items.append(
-                    _card(
-                        ft.ListTile(
-                            leading=_icon(ft.Icons.AUDIO_FILE),
-                            title=_text(entry),
-                            trailing=ft.Row(
-                                [indicator, close_button],
-                                spacing=6,
-                                tight=True,  # Prevents attempt to take up all space...
-                                alignment=ft.MainAxisAlignment.END
-                            ),
-                            content_padding=ft.Padding.only(left=16, right=16),
-                            on_click=lambda _, path=full_path: _play(path)
+                card, card_container = _card(
+                    ft.ListTile(
+                        leading=_icon(ft.Icons.AUDIO_FILE),
+                        title=_text(entry),
+                        trailing=ft.Row(
+                            [indicator, close_button],
+                            spacing=6,
+                            tight=True,  # Prevents attempt to take up all space...
+                            alignment=ft.MainAxisAlignment.END
                         ),
-                        add_padding=add_padding,
-                        on_hover=_on_entry_hover
-                    )
+                        content_padding=ft.Padding.only(left=16, right=16),
+                        on_click=lambda _, path=full_path: _play(path)
+                    ),
+                    add_padding=add_padding,
+                    on_hover=_on_entry_hover
                 )
+
+                close_button.on_tap_down = lambda _, _c=card_container: setattr(_c, "_suppress", True)
+                items.append(card)
 
         is_main_page = curr_dir == PROCESSED_DIR
         title_text = APP_NAME if is_main_page else os.path.relpath(curr_dir, PROCESSED_DIR)
