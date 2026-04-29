@@ -96,12 +96,6 @@ def _icon_button(icon: Union[str, ft.IconData], **kwargs) -> ft.IconButton:
     )
 
 
-def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
-    control.disabled = not enabled
-    control.mouse_cursor = ft.MouseCursor.CLICK if enabled else (ft.MouseCursor.BASIC if IS_WINDOWS else ft.MouseCursor.FORBIDDEN)
-    control.icon_color = ft.Colors.BLACK if enabled else ft.Colors.GREY_500
-
-
 def _border(**kwargs) -> ft.Border:
     return ft.Border.all(2, color=ft.Colors.BLACK, **kwargs)
 
@@ -114,6 +108,12 @@ def _shadow(**kwargs) -> ft.BoxShadow:
         offset=ft.Offset(5, 5),
         **kwargs
     )
+
+
+def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
+    control.disabled = not enabled
+    control.mouse_cursor = ft.MouseCursor.CLICK if enabled else (ft.MouseCursor.BASIC if IS_WINDOWS else ft.MouseCursor.FORBIDDEN)
+    control.icon_color = ft.Colors.BLACK if enabled else ft.Colors.GREY_500
 
 
 def _click_animation_scale() -> ft.Animation:
@@ -131,19 +131,23 @@ def _hover_and_click_animation(
     # Tracks whether the mouse is over this container, so the
     # async click handler can restore the correct scale if the
     # mouse leaves before the click animation finishes...
+    # E.g. if cursor leaves app...
     _is_hovering = False
 
     def _on_hover(event: ft.ControlEvent) -> None:
         nonlocal _is_hovering
         _is_hovering = event.data
+
         container.animate_scale = ft.Animation(SCALE_HOVER_DURATION, ft.AnimationCurve.EASE_IN_OUT)
         container.scale = SCALE_HOVER if _is_hovering else SCALE_DEFAULT
+
         if on_hover:
             on_hover(event)
+
         container.update()
 
     def _on_click(event: ft.ControlEvent) -> None:
-        # If suppressed reset it...
+        # If suppressed reset to unsupressed...
         if getattr(container, "_suppress", False):
             container._suppress = False
             return
@@ -237,7 +241,7 @@ def app(page: ft.Page) -> None:
 
     def _update_indicators() -> None:
         for path, (indicator, close_button) in misc_state.indicators.items():
-            if path == player_state.audio_path:
+            if path == player_state.audio_path:  # Audio selected...
                 indicator.visible = True
                 indicator.opacity = 0.3 if player_state.is_paused else 1.0
             else:
