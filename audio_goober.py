@@ -23,6 +23,7 @@ APP_NAME = "Audio Goober"
 NO_AUDIO = ">>> N/A"
 INVISIBLE = ""
 
+PAGE_WIDTH = 500
 PROGRESS_BAR_WIDTH = 300
 DEFAULT_VOLUME = 1.0
 MAX_VOLUME = 3.0
@@ -226,7 +227,7 @@ def app(page: ft.Page) -> None:
     page.window.maximizable = False
 
     page.padding = 20
-    page.window.width = 500
+    page.window.width = PAGE_WIDTH
     page.window.height = 600
 
     page.bgcolor = ft.Colors.WHITE
@@ -610,37 +611,45 @@ def app(page: ft.Page) -> None:
         ] if is_main_page else []
         misc_state.title_dots = title_dots
 
+        is_first_render = len(page.controls) == 0
+
         page.controls.clear()
         page.controls.append(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            _text(
-                                spans=[
-                                    ft.TextSpan("> "),
-                                    ft.TextSpan(title_text, ft.TextStyle(italic=True))
-                                ],
-                                size=24,
-                                weight=ft.FontWeight.BOLD
-                            ),
-                            *title_dots
-                        ],
-                        spacing=0
-                    ),
-                    ft.Container(
-                        content=ft.Divider(thickness=2, color=ft.Colors.BLACK),
-                        margin=ft.Margin.only(top=0, bottom=12)
-                    ),
-                    ft.ListView(
-                        items,
-                        expand=True,
-                        spacing=0
-                    ),
-                    bottom_div
-                ],
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                _text(
+                                    spans=[
+                                        ft.TextSpan("> "),
+                                        ft.TextSpan(title_text, ft.TextStyle(italic=True))
+                                    ],
+                                    size=24,
+                                    weight=ft.FontWeight.BOLD
+                                ),
+                                *title_dots
+                            ],
+                            spacing=0
+                        ),
+                        ft.Container(
+                            content=ft.Divider(thickness=2, color=ft.Colors.BLACK),
+                            margin=ft.Margin.only(top=0, bottom=12)
+                        ),
+                        ft.ListView(
+                            items,
+                            expand=True,
+                            spacing=0
+                        ),
+                        bottom_div
+                    ],
+                    expand=True,
+                    spacing=4
+                ),
                 expand=True,
-                spacing=4
+                opacity=0 if is_first_render and not IS_WINDOWS else 1,
+                animate_opacity=300,
+                width=PAGE_WIDTH
             )
         )
         page.update()
@@ -686,7 +695,7 @@ def app(page: ft.Page) -> None:
             # First load - initial delay...
             if prev_dots is None:
                 prev_dots = dots
-                await asyncio.sleep(1.25)
+                await asyncio.sleep(1)
                 continue
 
             # Navigated back to main page - reset cycle...
@@ -700,6 +709,8 @@ def app(page: ft.Page) -> None:
 
             # Fade in one by one...
             for dot in dots:
+                if dots is not misc_state.title_dots:
+                    break
                 try:
                     dot.opacity = 1
                     dot.update()
@@ -709,11 +720,14 @@ def app(page: ft.Page) -> None:
 
             # Fade all out...
             for dot in dots:
+                if dots is not misc_state.title_dots:
+                    break
                 try:
                     dot.opacity = 0
                     dot.update()
                 except RuntimeError:
                     break
+
             await asyncio.sleep(0.75)
 
     page.run_task(_animate_title)
@@ -722,9 +736,15 @@ def app(page: ft.Page) -> None:
 
     async def _show_window() -> None:
         if not IS_WINDOWS:
-            await asyncio.sleep(1)
-        page.window.visible = True
-        page.update()
+            # Show window (content is at opacity 0) so Flutter loads the font...
+            await asyncio.sleep(0.5)
+            page.window.visible = True
+            page.update()
+
+            # Let Flutter render a frame with the font loaded...
+            await asyncio.sleep(0.1)
+            page.controls[0].opacity = 1  # noqa
+            page.update()
 
     page.run_task(_show_window)
 
