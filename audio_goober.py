@@ -25,6 +25,7 @@ INVISIBLE = ""
 
 PAGE_WIDTH = 500
 PROGRESS_BAR_WIDTH = 300
+
 DEFAULT_VOLUME = 1.0
 MAX_VOLUME = 3.0
 VOLUME_SMALL_NUDGE = 0.05
@@ -44,6 +45,10 @@ SCALE_CLICK = 0.98
 SCALE_CLICK_DURATION = 100
 
 SCALE_BOUNCE = 0.96
+SCALE_BOUNCE_DURATION = 100
+
+SCALE_LOAD = 0.25
+SCALE_LOAD_DURATION = 100
 
 
 class Timing(Enum):
@@ -72,6 +77,8 @@ class PlayerState:
 @dataclass
 class MiscState:
     curr_dir: str = PROCESSED_DIR
+    prev_dir: Optional[str] = None
+    click_index: int = 0
     indicators: Dict = field(default_factory=dict)
     title_dots: List = field(default_factory=list)
 
@@ -116,8 +123,20 @@ def _toggle_clickability(control: ft.Control, enabled: bool) -> None:
     control.icon_color = ft.Colors.BLACK if enabled else ft.Colors.GREY_500
 
 
+def _hover_animation_scale() -> ft.Animation:
+    return ft.Animation(SCALE_HOVER_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+
+
 def _click_animation_scale() -> ft.Animation:
     return ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_OUT)
+
+
+def _bounce_animation_scale() -> ft.Animation:
+    return ft.Animation(SCALE_BOUNCE_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+
+
+def _load_animation_scale() -> ft.Animation:
+    return ft.Animation(SCALE_LOAD_DURATION, ft.AnimationCurve.EASE_IN_OUT)
 
 
 def _hover_and_click_animation(
@@ -126,7 +145,6 @@ def _hover_and_click_animation(
         on_hover: Optional[Any] = None,
         timing: Optional[Timing] = None
 ) -> None:
-    container.scale = SCALE_DEFAULT
 
     # Tracks whether the mouse is over this container, so the
     # async click handler can restore the correct scale if the
@@ -138,7 +156,7 @@ def _hover_and_click_animation(
         nonlocal _is_hovering
         _is_hovering = event.data
 
-        container.animate_scale = ft.Animation(SCALE_HOVER_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+        container.animate_scale = _hover_animation_scale()
         container.scale = SCALE_HOVER if _is_hovering else SCALE_DEFAULT
 
         if on_hover:
@@ -147,7 +165,7 @@ def _hover_and_click_animation(
         container.update()
 
     def _on_click(event: ft.ControlEvent) -> None:
-        # If suppressed reset to unsupressed...
+        # If suppressed reset to unsuppressed...
         if getattr(container, "_suppress", False):
             container._suppress = False
             return
@@ -201,8 +219,7 @@ def _card(
 
     items: List[Any] = [container]
     if add_padding:
-        # `GestureDetector(...)` used as padding b.c. can
-        # disable all ink & set mouse cursor...
+        # `GestureDetector(...)` used as padding b.c. can disable all ink & set mouse cursor...
         items.append(
             ft.GestureDetector(
                 content=ft.Container(height=16),
@@ -381,11 +398,13 @@ def app(page: ft.Page) -> None:
         ),
         padding=20,
         scale=SCALE_DEFAULT,
-        animate_scale=ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+        animate_scale=_bounce_animation_scale()
     )
 
     # Navigate directories...
-    def _navigate(path: str) -> None:
+    def _navigate(path: str, click_index: int = 0) -> None:
+        misc_state.prev_dir = misc_state.curr_dir
+        misc_state.click_index = click_index
         misc_state.curr_dir = path
         _render_elements()
 
@@ -421,10 +440,10 @@ def app(page: ft.Page) -> None:
             progress_bar.value = 0
 
     async def _bounce_player() -> None:
-        bottom_div.animate_scale = ft.Animation(SCALE_CLICK_DURATION, ft.AnimationCurve.EASE_IN_OUT)
+        bottom_div.animate_scale = _bounce_animation_scale()
         bottom_div.scale = SCALE_BOUNCE
         bottom_div.update()
-        await asyncio.sleep(SCALE_CLICK_DURATION / 1000)
+        await asyncio.sleep(SCALE_BOUNCE_DURATION / 1000)
         bottom_div.scale = SCALE_DEFAULT
         bottom_div.update()
 
@@ -510,24 +529,25 @@ def app(page: ft.Page) -> None:
         bottom_div.update()
 
     def _render_elements() -> None:
-        items = []
+        items: List[ft.Column] = []
+        card_containers: List[ft.Container] = []
         misc_state.indicators = {}
         curr_dir = misc_state.curr_dir
         entries = sorted(os.listdir(curr_dir))
 
         # Render back button...
         if curr_dir != PROCESSED_DIR:
-            items.append(
-                _card(
-                    ft.ListTile(
-                        leading=_icon(ft.Icons.ARROW_BACK),
-                        title=_text(".."),
-                        on_click=lambda _: _navigate(os.path.dirname(curr_dir))
-                    ),
-                    add_padding=len(entries) > 0,
-                    timing=Timing.END
-                )[0]
+            card, container = _card(
+                ft.ListTile(
+                    leading=_icon(ft.Icons.ARROW_BACK),
+                    title=_text(".."),
+                    on_click=lambda _: _navigate(os.path.dirname(curr_dir))
+                ),
+                add_padding=len(entries) > 0,
+                timing=Timing.END
             )
+            items.append(card)
+            card_containers.append(container)
 
         for i, entry in enumerate(entries):
             add_padding = i != len(entries) - 1
@@ -535,17 +555,17 @@ def app(page: ft.Page) -> None:
 
             # Render dirs...
             if os.path.isdir(full_path):
-                items.append(
-                    _card(
-                        ft.ListTile(
-                            leading=_icon(ft.Icons.FOLDER),
-                            title=_text(entry),
-                            on_click=lambda _, _path=full_path: _navigate(_path)
-                        ),
-                        add_padding=add_padding,
-                        timing=Timing.END
-                    )[0]
+                card, container = _card(
+                    ft.ListTile(
+                        leading=_icon(ft.Icons.FOLDER),
+                        title=_text(entry),
+                        on_click=lambda _, _path=full_path, _i=len(card_containers): _navigate(_path, _i)
+                    ),
+                    add_padding=add_padding,
+                    timing=Timing.END
                 )
+                items.append(card)
+                card_containers.append(container)
 
             # Render audio files...
             else:
@@ -605,6 +625,7 @@ def app(page: ft.Page) -> None:
 
                 close_button.on_tap_down = lambda _, _c=card_container: setattr(_c, "_suppress", True)
                 items.append(card)
+                card_containers.append(card_container)
 
         is_main_page = curr_dir == PROCESSED_DIR
         title_text = APP_NAME if is_main_page else os.path.relpath(curr_dir, PROCESSED_DIR)
@@ -657,6 +678,39 @@ def app(page: ft.Page) -> None:
             )
         )
         page.update()
+
+        # "Pop-in" animation for cards on page load...
+        # Exclude card user is hovering over (via `click_index`)...
+        async def _pop_cards() -> None:
+            # Skip on first load (no previous directory)...
+            if not misc_state.prev_dir:
+                return
+
+            click_index = misc_state.click_index
+            skip_container = card_containers[click_index] if click_index < len(card_containers) else None
+
+            targets = [
+                _card_container for _card_container in card_containers if _card_container is not skip_container
+            ]
+            if not targets:
+                return
+
+            # Shrink instantly...
+            for _card_container in targets:
+                _card_container.animate_scale = ft.Animation(0)
+                _card_container.scale = SCALE_LOAD
+                _card_container.update()
+
+            # Wait frame, then grow - weird magic number...
+            await asyncio.sleep(0.025)
+
+            for _card_container in targets:
+                _card_container.animate_scale = _load_animation_scale()
+                _card_container.scale = SCALE_DEFAULT
+                _card_container.update()
+                await asyncio.sleep(0.035)  # Cascade
+
+        page.run_task(_pop_cards)
 
     def _update_bottom_div() -> None:
         # Progress tick...
@@ -732,6 +786,7 @@ def app(page: ft.Page) -> None:
                 except RuntimeError:
                     break
 
+            # Restart...
             await asyncio.sleep(0.75)
 
     page.run_task(_animate_title)

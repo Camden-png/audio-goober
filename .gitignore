@@ -1,6 +1,8 @@
 audio/
 processed_audio/
 
+.DS_Store
+
 .idea/
 .venv/
 .vscode/
