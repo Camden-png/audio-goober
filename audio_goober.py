@@ -530,7 +530,7 @@ def app(page: ft.Page) -> None:
 
     def _render_elements() -> None:
         items: List[ft.Column] = []
-        card_containers: List[ft.Container] = []
+        card_containers: List[Any] = []
         misc_state.indicators = {}
         curr_dir = misc_state.curr_dir
         entries = sorted(os.listdir(curr_dir))
@@ -684,6 +684,11 @@ def app(page: ft.Page) -> None:
         async def _pop_cards() -> None:
             # Skip on first load (no previous directory)...
             if not misc_state.prev_dir:
+                return
+
+            # Early return to not look weird if only ".." & a single audio file exists...
+            has_back_button = misc_state.curr_dir.startswith(misc_state.prev_dir)
+            if has_back_button and len(card_containers) <= 2:
                 return
 
             click_index = misc_state.click_index
