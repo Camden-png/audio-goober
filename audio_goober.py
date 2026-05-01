@@ -591,12 +591,13 @@ def app(page: ft.Page) -> None:
                 # `GestureDetector` wraps the close button so its
                 # `on_tap_down` sets `_suppress` on the card container,
                 # preventing the card's press animation from firing...
+                # Show close button immediately if user is hovering over the playing track after page rebuild...
                 close_button = ft.GestureDetector(
                     content=_icon_button(
                         ft.Icons.CLOSE_OUTLINED,
                         on_click=_close
                     ),
-                    visible=False
+                    visible=full_path == player_state.audio_path and len(card_containers) == misc_state.click_index
                 )
 
                 misc_state.indicators[full_path] = (indicator, close_button)
@@ -717,18 +718,27 @@ def app(page: ft.Page) -> None:
 
         page.run_task(_pop_cards)
 
-    def _update_bottom_div() -> None:
-        # Progress tick...
-        if player_state.stream.is_active():
-            elapsed = player_state.frame_pos / SAMPLE_RATE
-            duration = player_state.total_frames / SAMPLE_RATE
-            progress_bar.value = min(elapsed / duration, 1.0) if duration else 0.0
+        # Restore indicator for currently-playing audio after page rebuild...
+        if player_state.audio_path:
+            _update_indicators()
 
-            audio_name = os.path.basename(player_state.audio_path)
-            player_text.value = f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
+    def _update_bottom_div() -> None:
+        is_active = player_state.stream.is_active()
+
+        # Track just finished - snap to end so progress shows final values...
+        if not is_active:
+            player_state.frame_pos = player_state.total_frames
+
+        # Progress tick...
+        elapsed = player_state.frame_pos / SAMPLE_RATE
+        duration = player_state.total_frames / SAMPLE_RATE
+        progress_bar.value = min(elapsed / duration, 1.0) if duration else 0.0
+
+        audio_name = os.path.basename(player_state.audio_path)
+        player_text.value = f"> {audio_name} [{int(elapsed)}s / {int(duration)}s]"
 
         # Track just finished...
-        else:
+        if not is_active:
             _reset_player(reset_volume=False, reset_bar=False)
             _toggle_clickability(pause_button, enabled=True)
             _toggle_clickability(volume_up_button, enabled=player_state.volume < MAX_VOLUME)
